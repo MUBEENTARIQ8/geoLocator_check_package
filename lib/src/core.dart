@@ -90,17 +90,14 @@ class GeoGuard {
     if (perm == LocationPermission.denied) {
       perm = await Geolocator.requestPermission();
     }
-    if (perm == LocationPermission.denied ||
-        perm == LocationPermission.deniedForever) {
+    if (perm == LocationPermission.denied || perm == LocationPermission.deniedForever) {
       throw StateError('Location permission denied');
     }
   }
 
   static Future<Position> _tryGetFix(Duration timeout, {bool bestNav = true}) {
-    final accuracy =
-        bestNav ? LocationAccuracy.bestForNavigation : LocationAccuracy.high;
-    return Geolocator.getCurrentPosition(desiredAccuracy: accuracy)
-        .timeout(timeout);
+    final accuracy = bestNav ? LocationAccuracy.bestForNavigation : LocationAccuracy.high;
+    return Geolocator.getCurrentPosition(desiredAccuracy: accuracy).timeout(timeout);
   }
 
   static Future<Position> _getFixWithRetries(GeoGuardConfig cfg) async {
@@ -110,9 +107,7 @@ class GeoGuard {
 
     while (DateTime.now().difference(start).inMilliseconds < cfg.timeBudgetMs) {
       try {
-        final pos = await _tryGetFix(
-            Duration(milliseconds: cfg.attemptTimeoutMs),
-            bestNav: (best == null));
+        final pos = await _tryGetFix(Duration(milliseconds: cfg.attemptTimeoutMs), bestNav: (best == null));
         final acc = pos.accuracy;
         if (acc < bestAcc) {
           best = pos;
@@ -130,16 +125,12 @@ class GeoGuard {
   static double _toRad(double deg) => deg * math.pi / 180.0;
 
   /// Haversine distance in meters.
-  static double distanceMeters(
-      double lat1, double lon1, double lat2, double lon2) {
+  static double distanceMeters(double lat1, double lon1, double lat2, double lon2) {
     const R = 6371000.0;
     final dLat = _toRad(lat2 - lat1);
     final dLon = _toRad(lon2 - lon1);
-    final a = math.sin(dLat / 2) * math.sin(dLat / 2) +
-        math.cos(_toRad(lat1)) *
-            math.cos(_toRad(lat2)) *
-            math.sin(dLon / 2) *
-            math.sin(dLon / 2);
+    final a =
+        math.sin(dLat / 2) * math.sin(dLat / 2) + math.cos(_toRad(lat1)) * math.cos(_toRad(lat2)) * math.sin(dLon / 2) * math.sin(dLon / 2);
     final c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a));
     return R * c;
   }
@@ -187,8 +178,7 @@ class GeoGuard {
       } catch (_) {}
     }
 
-    final score =
-        _qualityScore(accuracyM: pos.accuracy, fixAgeMs: ageMs, gnss: gnss);
+    final score = _qualityScore(accuracyM: pos.accuracy, fixAgeMs: ageMs, gnss: gnss);
     final effective = cfg.useAccuracyCushion ? (dist - pos.accuracy) : dist;
     final inside = effective <= radiusM && ageMs <= cfg.maxFixAgeMs;
 
@@ -229,10 +219,8 @@ class GeoGuard {
     final ts = pos.timestamp;
     final ageMs = now.difference(ts).inMilliseconds;
 
-    final dEntry =
-        distanceMeters(pos.latitude, pos.longitude, entryLat, entryLon);
-    final dOffice =
-        distanceMeters(pos.latitude, pos.longitude, officeLat, officeLon);
+    final dEntry = distanceMeters(pos.latitude, pos.longitude, entryLat, entryLon);
+    final dOffice = distanceMeters(pos.latitude, pos.longitude, officeLat, officeLon);
 
     Map<String, dynamic>? gnss;
     if (cfg.androidGnssSnapshot) {
@@ -241,12 +229,10 @@ class GeoGuard {
       } catch (_) {}
     }
 
-    final score =
-        _qualityScore(accuracyM: pos.accuracy, fixAgeMs: ageMs, gnss: gnss);
+    final score = _qualityScore(accuracyM: pos.accuracy, fixAgeMs: ageMs, gnss: gnss);
 
     final effEntry = cfg.useAccuracyCushion ? (dEntry - pos.accuracy) : dEntry;
-    final effOffice =
-        cfg.useAccuracyCushion ? (dOffice - pos.accuracy) : dOffice;
+    final effOffice = cfg.useAccuracyCushion ? (dOffice - pos.accuracy) : dOffice;
 
     final insideEntry = effEntry <= entryRadiusM && ageMs <= cfg.maxFixAgeMs;
     final insideOffice = effOffice <= officeRadiusM && ageMs <= cfg.maxFixAgeMs;
