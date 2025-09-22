@@ -1,0 +1,165 @@
+import 'dart:async';
+import 'dart:math' as math;
+import 'package:geolocator/geolocator.dart';
+import 'gnss_channel.dart';
+
+/// Tuning knobs for geofencing reliability behavior.
+class GeoGuardConfig {
+  /// Max total time budget for collecting a good fix.
+  final int timeBudgetMs;
+
+  /// Single attempt timeout.
+  final int attemptTimeoutMs;
+
+  /// Desired accuracy.
+  final double desiredAccuracyM;
+
+  /// Max acceptable fix age.
+  final int maxFixAgeMs;
+
+  /// Accept if (distance - accuracy) <= radius.
+  final bool useAccuracyCushion;
+
+  /// Android-only: include GNSS snapshot for quality scoring.
+  final bool androidGnssSnapshot;
+
+  const GeoGuardConfig({
+    this.timeBudgetMs = 12000,
+    this.attemptTimeoutMs = 6000,
+    this.desiredAccuracyM = 50.0,
+    this.maxFixAgeMs = 15000,
+    this.useAccuracyCushion = true,
+    this.androidGnssSnapshot = true,
+  });
+}
+
+/// Result of a quick check-in computation.
+class GeoGuardResult {
+  final bool inside;
+  final double distanceM;
+  final double accuracyM;
+  final int fixAgeMs;
+  final Position position;
+  final double qualityScore; // 0..1, higher = lower trust
+  final Map<String, dynamic>? androidGnss;
+
+  const GeoGuardResult({
+    required this.inside,
+    required this.distanceM,
+    required this.accuracyM,
+    required this.fixAgeMs,
+    required this.position,
+    required this.qualityScore,
+    this.androidGnss,
+  });
+}
+
+class GeoGuard {
+  /// Ask for location permission and confirm services are enabled.
+  static Future<void> ensurePermissions() async {
+    final enabled = await Geolocator.isLocationServiceEnabled();
+    if (!enabled) {
+      throw StateError('Location services disabled');
+    }
+    var perm = await Geolocator.checkPermission();
+    if (perm == LocationPermission.denied) {
+      perm = await Geolocator.requestPermission();
+    }
+    if (perm == LocationPermission.denied || perm == LocationPermission.deniedForever) {
+      throw StateError('Location permission denied');
+    }
+  }
+
+  static Future<Position> _tryGetFix(Duration timeout, {bool bestNav = true}) {
+    final accuracy = bestNav ? LocationAccuracy.bestForNavigation : LocationAccuracy.high;
+    return Geolocator.getCurrentPosition(desiredAccuracy: accuracy).timeout(timeout);
+  }
+
+  static Future<Position> _getFixWithRetries(GeoGuardConfig cfg) async {
+    final start = DateTime.now();
+    Position? best;
+    double bestAcc = double.infinity;
+
+    while (DateTime.now().difference(start).inMilliseconds < cfg.timeBudgetMs) {
+      try {
+        final pos = await _tryGetFix(Duration(milliseconds: cfg.attemptTimeoutMs), bestNav: (best == null));
+        final acc = pos.accuracy;
+        if (acc < bestAcc) { best = pos; bestAcc = acc; }
+        if (acc <= cfg.desiredAccuracyM) return pos;
+      } catch (_) {
+        // timeout or error → keep looping until time budget exceeded
+      }
+    }
+    if (best != null) return best;
+    throw TimeoutException('Unable to obtain location within time budget');
+  }
+
+  static double _toRad(double deg) => deg * math.pi / 180.0;
+
+  /// Haversine distance in meters.
+  static double distanceMeters(double lat1, double lon1, double lat2, double lon2) {
+    const R = 6371000.0;
+    final dLat = _toRad(lat2 - lat1);
+    final dLon = _toRad(lon2 - lon1);
+    final a = math.sin(dLat/2) * math.sin(dLat/2) +
+        math.cos(_toRad(lat1)) * math.cos(_toRad(lat2)) *
+        math.sin(dLon/2) * math.sin(dLon/2);
+    final c = 2 * math.atan2(math.sqrt(a), math.sqrt(1-a));
+    return R * c;
+  }
+
+  /// 0..1 quality score (higher = lower trust).
+  static double _qualityScore({
+    required double accuracyM,
+    required int fixAgeMs,
+    Map<String, dynamic>? gnss,
+  }) {
+    double s = 0;
+    if (accuracyM > 50) s += 0.4;
+    if (accuracyM > 100) s += 0.2;
+    if (fixAgeMs > 15000) s += 0.2;
+    if (gnss != null && gnss['supported'] == true) {
+      final sats = (gnss['satsUsed'] ?? 0) as int;
+      final cn0 = (gnss['avgCn0'] ?? 99.0) as double;
+      if (sats < 4) s += 0.2;
+      if (cn0 < 20) s += 0.2;
+    }
+    if (s < 0) s = 0; if (s > 1) s = 1;
+    return s;
+  }
+
+  /// Main API: get a fresh fix, compute distance, apply cushion, and return summary.
+  static Future<GeoGuardResult> quickCheck({
+    required double siteLat,
+    required double siteLon,
+    required double radiusM,
+    GeoGuardConfig cfg = const GeoGuardConfig(),
+  }) async {
+    await ensurePermissions();
+    final pos = await _getFixWithRetries(cfg);
+    final now = DateTime.now();
+    final ts = pos.timestamp;
+    final ageMs = now.difference(ts).inMilliseconds;
+
+    final dist = distanceMeters(pos.latitude, pos.longitude, siteLat, siteLon);
+
+    Map<String, dynamic>? gnss;
+    if (cfg.androidGnssSnapshot) {
+      try { gnss = await GnssChannel.snapshot(); } catch (_) {}
+    }
+
+    final score = _qualityScore(accuracyM: pos.accuracy, fixAgeMs: ageMs, gnss: gnss);
+    final effective = cfg.useAccuracyCushion ? (dist - pos.accuracy) : dist;
+    final inside = effective <= radiusM && ageMs <= cfg.maxFixAgeMs;
+
+    return GeoGuardResult(
+      inside: inside,
+      distanceM: dist,
+      accuracyM: pos.accuracy,
+      fixAgeMs: ageMs,
+      position: pos,
+      qualityScore: score,
+      androidGnss: gnss,
+    );
+  }
+}
