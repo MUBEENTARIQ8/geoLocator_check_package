@@ -79,6 +79,26 @@ class DualGeofenceResult {
   });
 }
 
+/// Result for office proximity checks.
+class OfficeProximityResult {
+  final double radiusM;
+  final double? distanceToIndoorOfficeM;
+  final double? distanceToEntryOfficeM;
+  final bool insideIndoorOffice;
+  final bool insideEntryOffice;
+  /// True if inside either indoor or entry office radius
+  final bool insideAnyOffice;
+
+  const OfficeProximityResult({
+    required this.radiusM,
+    this.distanceToIndoorOfficeM,
+    this.distanceToEntryOfficeM,
+    required this.insideIndoorOffice,
+    required this.insideEntryOffice,
+    required this.insideAnyOffice,
+  });
+}
+
 /// Distances between provided coordinate sets (in meters). Any null means that
 /// the corresponding pair was not computable due to missing inputs.
 class GeoDistances {
@@ -188,6 +208,45 @@ class GeoGuard {
       entryToOfficeM: entryToOfficeM,
       userToOfficeM: userToOfficeM,
       userToEntryM: userToEntryM,
+    );
+  }
+
+  /// Determine if user is inside office radii for indoor and entry points.
+  /// Returns per-point distances and booleans, plus overall insideAnyOffice.
+  static OfficeProximityResult officeProximity({
+    double? indoorOfficeLat,
+    double? indoorOfficeLon,
+    double? entryOfficeLat,
+    double? entryOfficeLon,
+    double? userLat,
+    double? userLon,
+    double radiusM = 300.0,
+  }) {
+    final bool hasUser = userLat != null && userLon != null;
+    final bool hasIndoor = indoorOfficeLat != null && indoorOfficeLon != null;
+    final bool hasEntry = entryOfficeLat != null && entryOfficeLon != null;
+
+    double? dIndoor;
+    double? dEntry;
+
+    if (hasUser && hasIndoor) {
+      dIndoor = distanceMeters(userLat, userLon, indoorOfficeLat, indoorOfficeLon);
+    }
+    if (hasUser && hasEntry) {
+      dEntry = distanceMeters(userLat, userLon, entryOfficeLat, entryOfficeLon);
+    }
+
+    final bool insideIndoor = dIndoor != null && dIndoor <= radiusM;
+    final bool insideEntry = dEntry != null && dEntry <= radiusM;
+    final bool insideAny = insideIndoor || insideEntry;
+
+    return OfficeProximityResult(
+      radiusM: radiusM,
+      distanceToIndoorOfficeM: dIndoor,
+      distanceToEntryOfficeM: dEntry,
+      insideIndoorOffice: insideIndoor,
+      insideEntryOffice: insideEntry,
+      insideAnyOffice: insideAny,
     );
   }
 
