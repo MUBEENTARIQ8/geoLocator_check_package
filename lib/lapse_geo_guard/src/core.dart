@@ -54,6 +54,23 @@ class GeoGuardResult {
   });
 }
 
+/// Distances between provided coordinate sets (in meters). Any null means that
+/// the corresponding pair was not computable due to missing inputs.
+class GeoDistances {
+  final double? entryToOfficeM;
+  final double? userToOfficeM;
+  final double? userToEntryM;
+
+  const GeoDistances({
+    this.entryToOfficeM,
+    this.userToOfficeM,
+    this.userToEntryM,
+  });
+
+  /// True if at least one distance could be computed.
+  bool get hasAnyDistance => entryToOfficeM != null || userToOfficeM != null || userToEntryM != null;
+}
+
 class GeoGuard {
   /// Ask for location permission and confirm services are enabled.
   static Future<void> ensurePermissions() async {
@@ -84,7 +101,10 @@ class GeoGuard {
       try {
         final pos = await _tryGetFix(Duration(milliseconds: cfg.attemptTimeoutMs), bestNav: (best == null));
         final acc = pos.accuracy;
-        if (acc < bestAcc) { best = pos; bestAcc = acc; }
+        if (acc < bestAcc) {
+          best = pos;
+          bestAcc = acc;
+        }
         if (acc <= cfg.desiredAccuracyM) return pos;
       } catch (_) {
         // timeout or error → keep looping until time budget exceeded
@@ -101,11 +121,49 @@ class GeoGuard {
     const R = 6371000.0;
     final dLat = _toRad(lat2 - lat1);
     final dLon = _toRad(lon2 - lon1);
-    final a = math.sin(dLat/2) * math.sin(dLat/2) +
-        math.cos(_toRad(lat1)) * math.cos(_toRad(lat2)) *
-        math.sin(dLon/2) * math.sin(dLon/2);
-    final c = 2 * math.atan2(math.sqrt(a), math.sqrt(1-a));
+    final a =
+        math.sin(dLat / 2) * math.sin(dLat / 2) + math.cos(_toRad(lat1)) * math.cos(_toRad(lat2)) * math.sin(dLon / 2) * math.sin(dLon / 2);
+    final c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a));
     return R * c;
+  }
+
+  /// Compute distances (in meters) between the provided coordinate sets.
+  /// - entry ↔ office
+  /// - user ↔ office
+  /// - user ↔ entry
+  ///
+  /// Any missing lat/lon pair yields a null for that specific distance.
+  static GeoDistances computeDistances({
+    double? entryLat,
+    double? entryLon,
+    double? officeLat,
+    double? officeLon,
+    double? userLat,
+    double? userLon,
+  }) {
+    final bool hasEntry = entryLat != null && entryLon != null;
+    final bool hasOffice = officeLat != null && officeLon != null;
+    final bool hasUser = userLat != null && userLon != null;
+
+    double? entryToOfficeM;
+    double? userToOfficeM;
+    double? userToEntryM;
+
+    if (hasEntry && hasOffice) {
+      entryToOfficeM = distanceMeters(entryLat, entryLon, officeLat, officeLon);
+    }
+    if (hasUser && hasOffice) {
+      userToOfficeM = distanceMeters(userLat, userLon, officeLat, officeLon);
+    }
+    if (hasUser && hasEntry) {
+      userToEntryM = distanceMeters(userLat, userLon, entryLat, entryLon);
+    }
+
+    return GeoDistances(
+      entryToOfficeM: entryToOfficeM,
+      userToOfficeM: userToOfficeM,
+      userToEntryM: userToEntryM,
+    );
   }
 
   /// 0..1 quality score (higher = lower trust).
@@ -124,7 +182,8 @@ class GeoGuard {
       if (sats < 4) s += 0.2;
       if (cn0 < 20) s += 0.2;
     }
-    if (s < 0) s = 0; if (s > 1) s = 1;
+    if (s < 0) s = 0;
+    if (s > 1) s = 1;
     return s;
   }
 
@@ -145,7 +204,9 @@ class GeoGuard {
 
     Map<String, dynamic>? gnss;
     if (cfg.androidGnssSnapshot) {
-      try { gnss = await GnssChannel.snapshot(); } catch (_) {}
+      try {
+        gnss = await GnssChannel.snapshot();
+      } catch (_) {}
     }
 
     final score = _qualityScore(accuracyM: pos.accuracy, fixAgeMs: ageMs, gnss: gnss);
