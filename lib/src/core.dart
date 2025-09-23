@@ -248,6 +248,7 @@ class GeoGuard {
       androidGnss: gnss,
     );
   }
+
   /// Convenience API: Only pass lat/lon/radius, returns inside? + details.
   static Future<GeoGuardResult> checkSingle({
     required double lat,
