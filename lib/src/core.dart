@@ -33,6 +33,14 @@ class GeoGuardConfig {
   });
 }
 
+/// A simple geofence site definition.
+class GeoPoint {
+  final double lat;
+  final double lon;
+  final double radiusM;
+  const GeoPoint({required this.lat, required this.lon, required this.radiusM});
+}
+
 /// Result of a quick check-in computation.
 class GeoGuardResult {
   final bool inside;
@@ -50,6 +58,32 @@ class GeoGuardResult {
     required this.fixAgeMs,
     required this.position,
     required this.qualityScore,
+    this.androidGnss,
+  });
+}
+
+/// Result for N geofences evaluated against a single fresh location fix.
+class MultiGeofenceResult {
+  final Position position;
+  final double accuracyM;
+  final int fixAgeMs;
+  final double qualityScore;
+  final Map<String, dynamic>? androidGnss;
+  /// Great-circle distance from user to each site (meters), same order as input.
+  final List<double> distancesM;
+  /// Whether the user is inside each site's radius, same order as input.
+  final List<bool> insideList;
+  /// True if inside any site.
+  final bool insideAny;
+
+  const MultiGeofenceResult({
+    required this.position,
+    required this.accuracyM,
+    required this.fixAgeMs,
+    required this.qualityScore,
+    required this.distancesM,
+    required this.insideList,
+    required this.insideAny,
     this.androidGnss,
   });
 }
@@ -170,6 +204,20 @@ class GeoGuard {
         math.sin(dLat / 2) * math.sin(dLat / 2) + math.cos(_toRad(lat1)) * math.cos(_toRad(lat2)) * math.sin(dLon / 2) * math.sin(dLon / 2);
     final c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a));
     return R * c;
+  }
+
+  /// Compute distances (in meters) from a user point to a list of sites.
+  static List<double> distancesToSites({
+    required double userLat,
+    required double userLon,
+    required List<GeoPoint> sites,
+  }) {
+    final List<double> out = List<double>.filled(sites.length, 0.0, growable: false);
+    for (int i = 0; i < sites.length; i++) {
+      final s = sites[i];
+      out[i] = distanceMeters(userLat, userLon, s.lat, s.lon);
+    }
+    return out;
   }
 
   /// Compute distances (in meters) between the provided coordinate sets.
@@ -316,6 +364,56 @@ class GeoGuard {
     GeoGuardConfig cfg = const GeoGuardConfig(),
   }) {
     return quickCheck(siteLat: lat, siteLon: lon, radiusM: radiusM, cfg: cfg);
+  }
+
+  /// Evaluate many geofences (e.g., 5 different lat/lon/radius) against a fresh fix.
+  /// Preserves order of [sites] in the result lists.
+  static Future<MultiGeofenceResult> checkMultiple({
+    required List<GeoPoint> sites,
+    GeoGuardConfig cfg = const GeoGuardConfig(),
+  }) async {
+    if (sites.isEmpty) {
+      throw ArgumentError('sites must not be empty');
+    }
+    await ensurePermissions();
+    final pos = await _getFixWithRetries(cfg);
+    final now = DateTime.now();
+    final ts = pos.timestamp;
+    final ageMs = now.difference(ts).inMilliseconds;
+
+    Map<String, dynamic>? gnss;
+    if (cfg.androidGnssSnapshot) {
+      try {
+        gnss = await GnssChannel.snapshot();
+      } catch (_) {}
+    }
+
+    final distances = distancesToSites(
+      userLat: pos.latitude,
+      userLon: pos.longitude,
+      sites: sites,
+    );
+
+    final List<bool> inside = List<bool>.filled(sites.length, false, growable: false);
+    for (int i = 0; i < sites.length; i++) {
+      final raw = distances[i];
+      final effective = cfg.useAccuracyCushion ? (raw - pos.accuracy) : raw;
+      inside[i] = effective <= sites[i].radiusM && ageMs <= cfg.maxFixAgeMs;
+    }
+
+    final score = _qualityScore(accuracyM: pos.accuracy, fixAgeMs: ageMs, gnss: gnss);
+    final any = inside.any((e) => e);
+
+    return MultiGeofenceResult(
+      position: pos,
+      accuracyM: pos.accuracy,
+      fixAgeMs: ageMs,
+      qualityScore: score,
+      distancesM: distances,
+      insideList: inside,
+      insideAny: any,
+      androidGnss: gnss,
+    );
   }
 
   /// Convenience API: Pass entry and office points. Returns dual geofence result.
