@@ -88,6 +88,30 @@ class MultiGeofenceResult {
   });
 }
 
+/// Human-friendly decision summary derived from a multi-geofence evaluation.
+class MultiGeofenceDecision {
+  final bool insideAny;
+  final String message;
+  final int? matchedSiteIndex;
+  final GeoPoint? matchedSite;
+  final double closestDistanceM;
+  final List<double> distancesM;
+  final List<bool> insideList;
+  final MultiGeofenceResult? raw;
+
+  MultiGeofenceDecision({
+    required this.insideAny,
+    required this.message,
+    required this.closestDistanceM,
+    required List<double> distances,
+    required List<bool> insideFlags,
+    this.matchedSiteIndex,
+    this.matchedSite,
+    this.raw,
+  })  : distancesM = List<double>.unmodifiable(distances),
+        insideList = List<bool>.unmodifiable(insideFlags);
+}
+
 /// Result for dual geofence check (entry + office).
 class DualGeofenceResult {
   final Position position;
@@ -259,6 +283,49 @@ class GeoGuard {
     );
   }
 
+  /// Evaluate user-provided coordinates against multiple geofences.
+  /// Returns message + metadata without attempting to obtain a fresh fix.
+  static MultiGeofenceDecision evaluatePositionAgainstSites({
+    required double userLat,
+    required double userLon,
+    required List<GeoPoint> sites,
+    double matchToleranceM = 5.0,
+    String insideMessage = 'You are within 500 m of a configured location.',
+    String outsideMessage = 'You are outside the 500 m radius for all locations.',
+  }) {
+    if (sites.isEmpty) {
+      throw ArgumentError('sites must not be empty');
+    }
+
+    final distances = distancesToSites(userLat: userLat, userLon: userLon, sites: sites);
+    final insideFlags = List<bool>.generate(sites.length, (i) => distances[i] <= sites[i].radiusM, growable: false);
+    final insideAny = insideFlags.any((flag) => flag);
+
+    int? matchedIndex;
+    GeoPoint? matchedSite;
+    for (int i = 0; i < sites.length; i++) {
+      if (distances[i] <= matchToleranceM) {
+        matchedIndex = i;
+        matchedSite = sites[i];
+        break;
+      }
+    }
+
+    final message = insideAny ? insideMessage : outsideMessage;
+    final closest = distances.reduce(math.min);
+
+    return MultiGeofenceDecision(
+      insideAny: insideAny,
+      message: message,
+      matchedSiteIndex: matchedIndex,
+      matchedSite: matchedSite,
+      closestDistanceM: closest,
+      distances: distances,
+      insideFlags: insideFlags,
+      raw: null,
+    );
+  }
+
   /// Determine if user is inside office radii for indoor and entry points.
   /// Returns per-point distances and booleans, plus overall insideAnyOffice.
   static OfficeProximityResult officeProximity({
@@ -413,6 +480,44 @@ class GeoGuard {
       insideList: inside,
       insideAny: any,
       androidGnss: gnss,
+    );
+  }
+
+  /// Like [checkMultiple] but also returns user-facing messages and match metadata.
+  static Future<MultiGeofenceDecision> checkMultipleWithDecision({
+    required List<GeoPoint> sites,
+    GeoGuardConfig cfg = const GeoGuardConfig(),
+    double matchToleranceM = 5.0,
+    String insideMessage = 'You are within 500 m of a configured location.',
+    String outsideMessage = 'You are outside the 500 m radius for all locations.',
+  }) async {
+    final result = await checkMultiple(sites: sites, cfg: cfg);
+
+    final distances = List<double>.from(result.distancesM);
+    final insideFlags = List<bool>.from(result.insideList);
+
+    int? matchedIndex;
+    GeoPoint? matchedSite;
+    for (int i = 0; i < sites.length; i++) {
+      if (distances[i] <= matchToleranceM) {
+        matchedIndex = i;
+        matchedSite = sites[i];
+        break;
+      }
+    }
+
+    final message = result.insideAny ? insideMessage : outsideMessage;
+    final closest = distances.reduce(math.min);
+
+    return MultiGeofenceDecision(
+      insideAny: result.insideAny,
+      message: message,
+      matchedSiteIndex: matchedIndex,
+      matchedSite: matchedSite,
+      closestDistanceM: closest,
+      distances: distances,
+      insideFlags: insideFlags,
+      raw: result,
     );
   }
 
