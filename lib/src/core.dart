@@ -90,6 +90,7 @@ class MultiGeofenceResult {
 
 /// Human-friendly decision summary derived from a multi-geofence evaluation.
 class MultiGeofenceDecision {
+  final int closestSiteIndex;
   final bool insideAny;
   final String message;
   final int? matchedSiteIndex;
@@ -105,6 +106,7 @@ class MultiGeofenceDecision {
     required this.closestDistanceM,
     required List<double> distances,
     required List<bool> insideFlags,
+    required this.closestSiteIndex,
     this.matchedSiteIndex,
     this.matchedSite,
     this.raw,
@@ -290,16 +292,40 @@ class GeoGuard {
     required double userLon,
     required List<GeoPoint> sites,
     double matchToleranceM = 5.0,
-    String insideMessage = 'You are within 500 m of a configured location.',
-    String outsideMessage = 'You are outside the 500 m radius for all locations.',
+    double withinRadiusM = 500.0,
+    double silenceRadiusM = 20.0,
+    String insideMessage = 'Please move closer to the window.',
+    String outsideMessage = 'You are more than 500 meters away. Please move closer.',
   }) {
     if (sites.isEmpty) {
       throw ArgumentError('sites must not be empty');
     }
 
+    return _evaluatePositionDecision(
+      userLat: userLat,
+      userLon: userLon,
+      sites: sites,
+      matchToleranceM: matchToleranceM,
+      withinRadiusM: withinRadiusM,
+      silenceRadiusM: silenceRadiusM,
+      insideMessage: insideMessage,
+      outsideMessage: outsideMessage,
+      baseResult: null,
+    );
+  }
+
+  static MultiGeofenceDecision _evaluatePositionDecision({
+    required double userLat,
+    required double userLon,
+    required List<GeoPoint> sites,
+    required double matchToleranceM,
+    required double withinRadiusM,
+    required double silenceRadiusM,
+    required String insideMessage,
+    required String outsideMessage,
+    MultiGeofenceResult? baseResult,
+  }) {
     final distances = distancesToSites(userLat: userLat, userLon: userLon, sites: sites);
-    final insideFlags = List<bool>.generate(sites.length, (i) => distances[i] <= sites[i].radiusM, growable: false);
-    final insideAny = insideFlags.any((flag) => flag);
 
     int? matchedIndex;
     GeoPoint? matchedSite;
@@ -311,18 +337,28 @@ class GeoGuard {
       }
     }
 
-    final message = insideAny ? insideMessage : outsideMessage;
-    final closest = distances.reduce(math.min);
+    final closestDistance = distances.reduce(math.min);
+    final closestIndex = distances.indexOf(closestDistance);
+    final insideFlags = List<bool>.generate(sites.length, (i) => distances[i] <= withinRadiusM, growable: false);
+    final insideAny = insideFlags.any((flag) => flag);
+
+    String message = outsideMessage;
+    if (closestDistance <= silenceRadiusM) {
+      message = '';
+    } else if (insideAny) {
+      message = insideMessage;
+    }
 
     return MultiGeofenceDecision(
       insideAny: insideAny,
       message: message,
+      closestSiteIndex: closestIndex,
       matchedSiteIndex: matchedIndex,
       matchedSite: matchedSite,
-      closestDistanceM: closest,
+      closestDistanceM: closestDistance,
       distances: distances,
       insideFlags: insideFlags,
-      raw: null,
+      raw: baseResult,
     );
   }
 
@@ -488,36 +524,23 @@ class GeoGuard {
     required List<GeoPoint> sites,
     GeoGuardConfig cfg = const GeoGuardConfig(),
     double matchToleranceM = 5.0,
-    String insideMessage = 'You are within 500 m of a configured location.',
-    String outsideMessage = 'You are outside the 500 m radius for all locations.',
+    double withinRadiusM = 500.0,
+    double silenceRadiusM = 20.0,
+    String insideMessage = 'Please move closer to the window.',
+    String outsideMessage = 'You are more than 500 meters away. Please move closer.',
   }) async {
     final result = await checkMultiple(sites: sites, cfg: cfg);
 
-    final distances = List<double>.from(result.distancesM);
-    final insideFlags = List<bool>.from(result.insideList);
-
-    int? matchedIndex;
-    GeoPoint? matchedSite;
-    for (int i = 0; i < sites.length; i++) {
-      if (distances[i] <= matchToleranceM) {
-        matchedIndex = i;
-        matchedSite = sites[i];
-        break;
-      }
-    }
-
-    final message = result.insideAny ? insideMessage : outsideMessage;
-    final closest = distances.reduce(math.min);
-
-    return MultiGeofenceDecision(
-      insideAny: result.insideAny,
-      message: message,
-      matchedSiteIndex: matchedIndex,
-      matchedSite: matchedSite,
-      closestDistanceM: closest,
-      distances: distances,
-      insideFlags: insideFlags,
-      raw: result,
+    return _evaluatePositionDecision(
+      userLat: result.position.latitude,
+      userLon: result.position.longitude,
+      sites: sites,
+      baseResult: result,
+      matchToleranceM: matchToleranceM,
+      withinRadiusM: withinRadiusM,
+      silenceRadiusM: silenceRadiusM,
+      insideMessage: insideMessage,
+      outsideMessage: outsideMessage,
     );
   }
 

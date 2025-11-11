@@ -22,7 +22,9 @@ void main() {
     expect(res.insideAny, isTrue);
     expect(res.matchedSiteIndex, 0);
     expect(res.matchedSite, sites.first);
-    expect(res.message, 'You are within 500 m of a configured location.');
+    expect(res.message, isEmpty);
+    expect(res.closestSiteIndex, 0);
+    expect(res.closestDistanceM, closeTo(0, 0.01));
   });
 
   test('evaluatePositionAgainstSites detects outside', () {
@@ -39,7 +41,25 @@ void main() {
 
     expect(res.insideAny, isFalse);
     expect(res.matchedSiteIndex, isNull);
-    expect(res.message, 'You are outside the 500 m radius for all locations.');
+    expect(res.message, 'You are more than 500 meters away. Please move closer.');
     expect(res.closestDistanceM, greaterThan(500));
+  });
+
+  test('evaluatePositionAgainstSites shows inside message between 20m and 500m', () {
+    const sites = [
+      GeoPoint(lat: 24.711667019762736, lon: 46.62244234390605, radiusM: 500),
+    ];
+
+    final res = GeoGuard.evaluatePositionAgainstSites(
+      userLat: 24.711667019762736 + 0.0003,
+      userLon: 46.62244234390605,
+      sites: sites,
+    );
+
+    expect(res.insideAny, isTrue);
+    expect(res.message, 'Please move closer to the window.');
+    expect(res.closestSiteIndex, 0);
+    expect(res.closestDistanceM, greaterThan(20));
+    expect(res.closestDistanceM, lessThan(500));
   });
 }
