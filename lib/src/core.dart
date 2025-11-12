@@ -233,17 +233,22 @@ class GeoGuard {
   }
 
   /// Compute distances (in meters) from a user point to a list of sites.
+  /// IMPORTANT: This function checks ALL sites (1 site ho ya 5 sites, sab ko check karega)
+  /// Returns a list of distances where each index corresponds to each site in the input list.
   static List<double> distancesToSites({
     required double userLat,
     required double userLon,
     required List<GeoPoint> sites,
   }) {
+    // Create output list with size = number of sites (sab sites ke liye distance calculate karega)
     final List<double> out = List<double>.filled(sites.length, 0.0, growable: false);
+    // Loop through ALL sites (1 site ho ya 5 sites, sab ko check karega)
     for (int i = 0; i < sites.length; i++) {
       final s = sites[i];
+      // Calculate distance to each site and store in output list
       out[i] = distanceMeters(userLat, userLon, s.lat, s.lon);
     }
-    return out;
+    return out; // Returns distances to ALL sites
   }
 
   /// Compute distances (in meters) between the provided coordinate sets.
@@ -325,46 +330,62 @@ class GeoGuard {
     required String outsideMessage,
     MultiGeofenceResult? baseResult,
   }) {
-    // Calculate distances to ALL sites
+    // IMPORTANT: Calculate distances to ALL sites (1 site ho ya 5 sites, sab ko check karega)
+    // This function loops through ALL sites and calculates distance to each one
     final distances = distancesToSites(userLat: userLat, userLon: userLon, sites: sites);
 
-    // Find the closest site and its distance
+    // Find the CLOSEST site from ALL sites (sab sites mein se sabse close wala)
+    // This ensures we check ALL sites, not just the first one
     final closestDistance = distances.reduce(math.min);
     final closestIndex = distances.indexOf(closestDistance);
 
-    // Check for exact match (within matchToleranceM)
+    // Check ALL sites for exact match (within matchToleranceM ~5m)
+    // Agar koi BHI ek site match ho jaye (5m ke andar), to matchedIndex set hoga
     int? matchedIndex;
     GeoPoint? matchedSite;
     for (int i = 0; i < sites.length; i++) {
       if (distances[i] <= matchToleranceM) {
+        // Koi ek site match ho gaya (5m ke andar) - sab sites check ki, pehli match mili
         matchedIndex = i;
         matchedSite = sites[i];
-        break;
+        break; // Pehli match milte hi break (but sab sites check ho chuki hain)
       }
     }
 
-    // Check if user is within withinRadiusM of ANY site
+    // Check if user is within withinRadiusM of ANY site (sab sites check karke)
+    // Agar koi BHI ek site ke andar ho, to insideAny = true
     final insideFlags = List<bool>.generate(sites.length, (i) => distances[i] <= withinRadiusM, growable: false);
-    final insideAny = insideFlags.any((flag) => flag);
+    final insideAny = insideFlags.any((flag) => flag); // Koi bhi ek true ho to insideAny = true
 
     // Determine message based on distance thresholds
-    // - If within 30m of ANY site: show insideMessage
-    // - If more than 300m away from ALL sites: show outsideMessage
-    // - Otherwise (between 30m and 300m): show insideMessage
+    // Logic: Sab sites check ki, ab closest distance ke basis pe message decide karega
+    // - Agar koi BHI ek site match ho (5m ke andar): empty message (no alert)
+    // - Agar sab sites se 300m se zyada door: "Too far" message
+    // - Agar koi site 30m ke andar ho ya 30m-300m ke beech: "Go near window" message
     String message;
     
-    // Check if user is within 30m of the closest site
-    if (closestDistance <= 30.0) {
-      // User is very close (within 30m), show insideMessage
-      message = insideMessage;
-    } 
-    // Check if user is more than 300m away from ALL sites
+    // Step 1: Check if ANY site matches (within matchToleranceM ~5m)
+    // IMPORTANT: Check both matchedIndex AND closestDistance to be safe
+    // Agar closest distance hi 5m se kam hai, to definitely match hai
+    if (matchedIndex != null || closestDistance <= matchToleranceM) {
+      // Koi ek site match ho gaya (5m ke andar) - sab sites check ki, match mila
+      // Location matches perfectly - no message needed (user is very close, no alert)
+      message = '';
+      // Debug: Log when match is detected
+      // print('GeoGuard: Match detected - closestDistance=${closestDistance.toStringAsFixed(1)}m, matchedIndex=$matchedIndex');
+    }
+    // Step 2: Check if user is more than 300m away from ALL sites
+    // closestDistance = sab sites mein se sabse kam distance
+    // Agar yeh bhi 300m se zyada hai, to sab sites se door hai
     else if (closestDistance > 300.0) {
-      // User is too far from all sites (more than 300m)
+      // User sab sites se 300m se zyada door hai - show "too far" message
       message = outsideMessage;
     }
-    // User is between 30m and 300m - show insideMessage
+    // Step 3: User is within 30m OR between 30m-300m of closest site
+    // Agar closest distance 300m se kam hai, to koi site pass hai
     else {
+      // User kisi site ke 30m ke andar hai ya 30m-300m ke beech hai
+      // Sab sites check ki, closest site ke basis pe message
       message = insideMessage;
     }
 
