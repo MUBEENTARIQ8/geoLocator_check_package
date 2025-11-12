@@ -325,8 +325,14 @@ class GeoGuard {
     required String outsideMessage,
     MultiGeofenceResult? baseResult,
   }) {
+    // Calculate distances to ALL sites
     final distances = distancesToSites(userLat: userLat, userLon: userLon, sites: sites);
 
+    // Find the closest site and its distance
+    final closestDistance = distances.reduce(math.min);
+    final closestIndex = distances.indexOf(closestDistance);
+
+    // Check for exact match (within matchToleranceM)
     int? matchedIndex;
     GeoPoint? matchedSite;
     for (int i = 0; i < sites.length; i++) {
@@ -337,15 +343,28 @@ class GeoGuard {
       }
     }
 
-    final closestDistance = distances.reduce(math.min);
-    final closestIndex = distances.indexOf(closestDistance);
+    // Check if user is within withinRadiusM of ANY site
     final insideFlags = List<bool>.generate(sites.length, (i) => distances[i] <= withinRadiusM, growable: false);
     final insideAny = insideFlags.any((flag) => flag);
 
-    String message = outsideMessage;
-    if (closestDistance <= silenceRadiusM) {
-      message = '';
-    } else if (insideAny) {
+    // Determine message based on distance thresholds
+    // - If within 30m of ANY site: show insideMessage
+    // - If more than 300m away from ALL sites: show outsideMessage
+    // - Otherwise (between 30m and 300m): show insideMessage
+    String message;
+    
+    // Check if user is within 30m of the closest site
+    if (closestDistance <= 30.0) {
+      // User is very close (within 30m), show insideMessage
+      message = insideMessage;
+    } 
+    // Check if user is more than 300m away from ALL sites
+    else if (closestDistance > 300.0) {
+      // User is too far from all sites (more than 300m)
+      message = outsideMessage;
+    }
+    // User is between 30m and 300m - show insideMessage
+    else {
       message = insideMessage;
     }
 
